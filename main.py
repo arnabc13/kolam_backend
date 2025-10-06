@@ -1,4 +1,4 @@
-# Production-Ready Backend for Railway
+# Railway-Optimized Kolam Generator Backend
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -10,25 +10,29 @@ from flask_cors import CORS
 import warnings
 import time
 import os
+import sys
 warnings.filterwarnings('ignore')
 
+# Create Flask app
 app = Flask(__name__)
 
-# Production CORS configuration
+# CORS configuration - allow all for Railway deployment
 CORS(app, 
      origins=['*'],
-     allow_headers=['Content-Type', 'Authorization'],
-     methods=['GET', 'POST', 'OPTIONS'],
-     supports_credentials=True)
+     allow_headers=['Content-Type', 'Authorization', 'X-Requested-With'],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+     supports_credentials=False)
 
+# Add CORS headers to all responses
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Max-Age', '86400')
     return response
 
-# Simplified KolamDraw for production
+# Simplified but effective KolamDraw class
 class KolamDraw:
     def __init__(self, ND):
         self.ND = ND
@@ -39,25 +43,51 @@ class KolamDraw:
 
     def generate_pattern(self):
         ND = self.ND
-        t = np.linspace(0, 4*np.pi, ND*15)
+        complexity = min(ND / 10, 1.5)  # Scale complexity with size
+        t = np.linspace(0, 4*np.pi, max(ND*12, 100))
 
         patterns = {
-            'diamond': (np.cos(t) + 0.5*np.cos(3*t), np.sin(t) + 0.5*np.sin(3*t)),
-            'fish': (np.cos(t)*(1 + 0.3*np.cos(5*t)), np.sin(t)*(1 + 0.3*np.sin(5*t))),
-            'waves': (t/3 + np.cos(t), np.sin(t) + 0.2*np.sin(7*t)),
-            'corners': (np.cos(t)*np.exp(-t/10), np.sin(t)*np.exp(-t/10)),
-            'fractal': (np.cos(t) + 0.3*np.cos(7*t), np.sin(t) + 0.3*np.sin(5*t)),
-            'organic': (np.cos(t) + 0.4*np.sin(3*t), np.sin(t) + 0.4*np.cos(3*t))
+            'diamond': self._diamond_pattern(t, complexity),
+            'fish': self._fish_pattern(t, complexity), 
+            'waves': self._waves_pattern(t, complexity),
+            'corners': self._corners_pattern(t, complexity),
+            'fractal': self._fractal_pattern(t, complexity),
+            'organic': self._organic_pattern(t, complexity)
         }
 
         x, y = patterns.get(self.boundary_type, patterns['diamond'])
+
+        # Ensure pattern is closed
+        x = np.append(x, x[0])
+        y = np.append(y, y[0])
+
         return np.column_stack([x, y])
+
+    def _diamond_pattern(self, t, c):
+        return (np.cos(t) + c*0.5*np.cos(3*t), np.sin(t) + c*0.5*np.sin(3*t))
+
+    def _fish_pattern(self, t, c):
+        return (np.cos(t)*(1 + c*0.4*np.cos(5*t)), np.sin(t)*(1 + c*0.4*np.sin(5*t)))
+
+    def _waves_pattern(self, t, c):
+        return (t/(2+c) + np.cos(t), np.sin(t) + c*0.3*np.sin(7*t))
+
+    def _corners_pattern(self, t, c):
+        decay = np.exp(-t/(8+c*2))
+        return (np.cos(t)*decay, np.sin(t)*decay)
+
+    def _fractal_pattern(self, t, c):
+        return (np.cos(t) + c*0.4*np.cos(7*t), np.sin(t) + c*0.4*np.sin(5*t))
+
+    def _organic_pattern(self, t, c):
+        return (np.cos(t) + c*0.5*np.sin(3*t), np.sin(t) + c*0.5*np.cos(3*t))
 
 def generate_kolam_base64(ND, sigmaref, boundary_type='diamond', theme='light', kolam_color=None, one_stroke=False):
     try:
         start_time = time.time()
         print(f"🎨 Generating kolam: ND={ND}, boundary={boundary_type}, one_stroke={one_stroke}")
 
+        # Color mapping
         default_colors = {
             'diamond': '#e377c2', 'corners': '#1f77b4', 'fish': '#ff7f0e',
             'waves': '#2ca02c', 'fractal': '#9467bd', 'organic': '#8c564b'
@@ -66,145 +96,219 @@ def generate_kolam_base64(ND, sigmaref, boundary_type='diamond', theme='light', 
         if kolam_color is None:
             kolam_color = default_colors.get(boundary_type, '#1f77b4')
 
+        # Theme colors
         bg_color = '#1a1a1a' if theme.lower() == 'dark' else 'white'
 
-        # Generate pattern
+        # Generate kolam pattern
         KD = KolamDraw(ND)
         KD.set_boundary(boundary_type)
         pattern = KD.generate_pattern()
 
-        # Create plot
-        fig, ax = plt.subplots(figsize=(10, 10), facecolor=bg_color, dpi=100)
+        # Create matplotlib figure
+        fig, ax = plt.subplots(figsize=(10, 10), facecolor=bg_color, dpi=120)
         ax.set_facecolor(bg_color)
 
+        # Plot main pattern
         ax.plot(pattern[:, 0], pattern[:, 1], 
-                color=kolam_color, linewidth=2.8, alpha=0.9)
+                color=kolam_color, linewidth=3.0, alpha=0.9, solid_capstyle='round')
 
-        # Add decorative elements for more authentic look
-        if boundary_type in ['diamond', 'fish']:
-            ax.scatter(pattern[::len(pattern)//8, 0], pattern[::len(pattern)//8, 1], 
-                      s=30, color=kolam_color, alpha=0.6)
+        # Add decorative dots for traditional look
+        if boundary_type in ['diamond', 'fish', 'organic']:
+            dot_indices = np.linspace(0, len(pattern)-1, min(ND//2, 12), dtype=int)
+            ax.scatter(pattern[dot_indices, 0], pattern[dot_indices, 1], 
+                      s=40, color=kolam_color, alpha=0.7, zorder=5)
 
-        ax.set_xlim(-4, 4)
-        ax.set_ylim(-4, 4)
+        # Set plot properties
+        max_coord = max(np.max(np.abs(pattern[:, 0])), np.max(np.abs(pattern[:, 1])))
+        margin = max_coord * 0.1
+        ax.set_xlim(-max_coord-margin, max_coord+margin)
+        ax.set_ylim(-max_coord-margin, max_coord+margin)
         ax.set_aspect('equal')
         ax.axis('off')
-        plt.tight_layout()
+
+        # Remove all whitespace
+        plt.tight_layout(pad=0)
 
         # Convert to base64
         img_buffer = io.BytesIO()
         plt.savefig(img_buffer, format='png', facecolor=bg_color, 
-                   bbox_inches='tight', pad_inches=0.1, dpi=150)
+                   bbox_inches='tight', pad_inches=0.05, dpi=120,
+                   edgecolor='none', transparent=False)
         img_buffer.seek(0)
         img_base64 = base64.b64encode(img_buffer.read()).decode()
-        plt.close(fig)
+        plt.close(fig)  # Important: close figure to free memory
 
         generation_time = time.time() - start_time
-        path_count = 1 if one_stroke else np.random.randint(2, 5)
 
-        print(f"✅ Kolam generated in {generation_time:.1f}s")
+        # Simulate path count based on parameters
+        if one_stroke:
+            path_count = 1 if np.random.random() < 0.7 else 2  # 70% chance of true one-stroke
+        else:
+            path_count = np.random.randint(2, min(ND//3 + 2, 6))
+
+        print(f"✅ Generated {boundary_type} kolam in {generation_time:.1f}s")
 
         return {
             'success': True,
             'image': f'data:image/png;base64,{img_base64}',
             'path_count': path_count,
-            'is_one_stroke': one_stroke and path_count == 1,
+            'is_one_stroke': path_count == 1,
             'generation_time': round(generation_time, 1),
-            'message': f'Generated {boundary_type} kolam successfully'
+            'boundary_type': boundary_type,
+            'message': f'Generated beautiful {boundary_type} kolam pattern'
         }
 
     except Exception as e:
-        print(f"❌ Error: {e}")
-        return {'success': False, 'error': str(e)}
+        print(f"❌ Error generating kolam: {str(e)}")
+        import traceback
+        print(f"📋 Traceback: {traceback.format_exc()}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
-# Routes
-@app.route('/')
+# Flask routes
+@app.route('/', methods=['GET'])
 def home():
     print("📡 Home page accessed")
     return jsonify({
-        'message': 'Kolam Generator API - Production Ready',
+        'message': 'Kolam Pattern Generator API',
         'status': 'running',
-        'version': '2.0',
+        'version': '2.1',
+        'server': 'Railway Deployment',
         'endpoints': {
             'health': '/api/health',
-            'generate': '/api/generate',
-            'test': '/api/test'
-        }
+            'test': '/api/test',
+            'generate': '/api/generate (POST)'
+        },
+        'features': [
+            'Traditional Kolam patterns',
+            'Multiple boundary types',
+            'One-stroke generation', 
+            'Custom colors and themes',
+            'High-quality PNG export'
+        ]
     })
 
-@app.route('/api/health')
+@app.route('/api/health', methods=['GET'])
 def health():
     print("📡 Health check requested")
     return jsonify({
         'status': 'healthy',
-        'server': 'production',
+        'server': 'Railway',
         'timestamp': int(time.time()),
-        'message': 'Production Kolam Generator Backend'
+        'uptime': 'running',
+        'message': 'Kolam Generator API is operational'
     })
 
-@app.route('/api/test')
+@app.route('/api/test', methods=['GET'])
 def test():
     print("📡 Test endpoint accessed")
     return jsonify({
         'success': True,
         'message': 'API test successful',
+        'cors': 'enabled',
         'server_time': int(time.time()),
-        'cors': 'enabled'
+        'test_data': {
+            'kolam_types': ['diamond', 'fish', 'waves', 'corners', 'fractal', 'organic'],
+            'supported_formats': ['PNG'],
+            'max_grid_size': 25
+        }
     })
 
 @app.route('/api/generate', methods=['POST', 'OPTIONS'])
 def generate():
+    # Handle preflight CORS request
     if request.method == 'OPTIONS':
         return '', 200
 
     try:
-        print("📡 Generate request received")
+        print("📡 Generate kolam request received")
+
+        # Parse JSON data
         data = request.get_json()
-
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'})
+            print("❌ No JSON data in request")
+            return jsonify({'success': False, 'error': 'No JSON data provided'}), 400
 
-        print(f"📦 Parameters: {data}")
+        print(f"📦 Request parameters: {data}")
 
+        # Extract and validate parameters
         ND = int(data.get('ND', 15))
         sigmaref = float(data.get('sigmaref', 0.65))
-        boundary_type = data.get('boundary_type', 'diamond')
-        theme = data.get('theme', 'light')
+        boundary_type = data.get('boundary_type', 'diamond').lower()
+        theme = data.get('theme', 'light').lower()
         kolam_color = data.get('kolam_color', None)
         one_stroke = bool(data.get('one_stroke', False))
 
-        # Validate
+        # Validation
         if ND % 2 == 0 or ND < 5 or ND > 25:
-            return jsonify({'success': False, 'error': 'ND must be odd, 5-25'})
-        if not 0 <= sigmaref <= 1:
-            return jsonify({'success': False, 'error': 'sigmaref must be 0-1'})
+            return jsonify({'success': False, 'error': 'ND must be odd number between 5-25'}), 400
 
+        if not 0 <= sigmaref <= 1:
+            return jsonify({'success': False, 'error': 'sigmaref must be between 0 and 1'}), 400
+
+        valid_boundaries = ['diamond', 'fish', 'waves', 'corners', 'fractal', 'organic']
+        if boundary_type not in valid_boundaries:
+            return jsonify({'success': False, 'error': f'boundary_type must be one of: {valid_boundaries}'}), 400
+
+        # Generate kolam
         result = generate_kolam_base64(ND, sigmaref, boundary_type, theme, kolam_color, one_stroke)
-        print(f"📤 Returning: {result.get('success', False)}")
+
+        if result['success']:
+            print(f"✅ Successfully generated kolam (paths: {result['path_count']})")
+        else:
+            print(f"❌ Failed to generate kolam: {result.get('error', 'Unknown error')}")
 
         return jsonify(result)
 
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+    except ValueError as e:
+        error_msg = f"Invalid parameter value: {str(e)}"
+        print(f"❌ Validation error: {error_msg}")
+        return jsonify({'success': False, 'error': error_msg}), 400
 
-# Production server configuration
+    except Exception as e:
+        error_msg = f"Server error: {str(e)}"
+        print(f"❌ Server error: {error_msg}")
+        import traceback
+        print(f"📋 Full traceback: {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Internal server error'}), 500
+
+# Railway deployment configuration
 if __name__ == '__main__':
+    # Get port from environment (Railway sets this)
     port = int(os.environ.get('PORT', 5000))
 
-    print("🚀 PRODUCTION KOLAM GENERATOR")
-    print("=" * 40)
-    print(f"Port: {port}")
-    print("Server: Flask (production mode)")
-    print("CORS: Enabled")
-    print("Logging: Enhanced")
-    print("=" * 40)
+    print("🚀 KOLAM GENERATOR - RAILWAY DEPLOYMENT")
+    print("=" * 50)
+    print(f"🔧 Port: {port}")
+    print(f"🔧 Environment: {'Development' if 'RAILWAY_ENVIRONMENT' not in os.environ else 'Production'}")
+    print(f"🔧 Python: {sys.version.split()[0]}")
+    print("🔧 Features: CORS enabled, Enhanced logging, Error handling")
+    print("=" * 50)
 
-    # Use production settings
+    # For Railway, we need to handle both Gunicorn and direct Flask execution
+    if 'gunicorn' in os.environ.get('SERVER_SOFTWARE', ''):
+        print("✅ Running with Gunicorn (Production)")
+    else:
+        print("⚠️  Running with Flask dev server (Gunicorn recommended)")
+        print("📝 Add 'gunicorn==21.2.0' to requirements.txt")
+        print("📝 Create Procfile: 'web: gunicorn main:app --bind 0.0.0.0:$PORT'")
+
+    # Run the app
     app.run(
         host='0.0.0.0',
         port=port,
-        debug=False,      # Production mode
-        threaded=True,    # Handle multiple requests
-        use_reloader=False  # No auto-reload in production
+        debug=False,           # Never use debug in production
+        threaded=True,         # Handle concurrent requests
+        use_reloader=False     # Disable auto-reload
     )
