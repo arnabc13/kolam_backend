@@ -1,5 +1,5 @@
 # main.py - Railway entry point for Kolam Generator
-from backend_one_stroke_optimized import app
+from backend import app
 import os
 
 if __name__ == "__main__":
