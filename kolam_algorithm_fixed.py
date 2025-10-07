@@ -439,4 +439,3 @@ if __name__ == "__main__":
     GenerateKolam(19, 0.65, 'waves', theme='dark', kolam_color='white')
     GenerateKolam(19, 0.65, 'fish', theme='dark', kolam_color='cyan')
 
-
